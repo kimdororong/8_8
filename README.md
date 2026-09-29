@@ -23,6 +23,7 @@ python cross_soccer.py host
 python cross_soccer.py join 192.168.0.5 4821
 ```
 
+- **host를 켠 사람이 오른쪽 모니터에 앉았다면** `python cross_soccer.py host --me right` 로 켜세요. (join 쪽은 자동으로 반대쪽이 돼요.)
 - host를 처음 켜면 Windows 방화벽 창이 뜨는데 **허용**을 눌러 주세요.
 - 4자리 코드가 맞아야만 연결돼요. 서로 아는 사람끼리만 쓰세요.
 

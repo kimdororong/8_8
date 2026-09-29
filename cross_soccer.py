@@ -348,7 +348,8 @@ def open_link(sock):
     return sock, sock.makefile("r", encoding="utf-8")
 
 
-def host_wait():
+def host_wait(host_pass):
+    """host_pass: host 화면에서 옆사람과 이어진 면('right'/'left'). 반대쪽은 join 쪽에 자동 지정."""
     code = "%04d" % random.randrange(10000)
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -365,7 +366,8 @@ def host_wait():
         except ValueError:
             hello = {}
         if hello.get("code") == code:
-            sock.sendall(b'{"t": "ok"}\n')
+            joiner_pass = "left" if host_pass == "right" else "right"
+            sock.sendall((json.dumps({"t": "ok", "pass": joiner_pass}) + "\n").encode())
             srv.close()
             return Link(sock, reader)
         print("코드가 틀린 접속을 거절했어요:", addr[0])
@@ -376,13 +378,15 @@ def join_to(ip, code):
     try:
         sock, reader = open_link(socket.create_connection((ip, PORT), timeout=10))
         sock.sendall((json.dumps({"t": "hello", "code": code}) + "\n").encode())
-        ok = json.loads(reader.readline() or "{}").get("t") == "ok"
+        reply = json.loads(reader.readline() or "{}")
+        ok = reply.get("t") == "ok"
     except (OSError, ValueError):
         sys.exit("접속하지 못했어요. IP가 맞는지, 같은 와이파이인지, 상대의 방화벽 허용을 눌렀는지 확인해 주세요.")
     if not ok:
         sys.exit("코드가 맞지 않아요.")
     sock.settimeout(None)
-    return Link(sock, reader)
+    pass_edge = reply.get("pass") if reply.get("pass") in ("left", "right") else "left"
+    return Link(sock, reader), pass_edge
 
 
 # ------------------------------------------------------------------ Windows / 화면
@@ -626,8 +630,10 @@ class Overlay:
 def main():
     ap = argparse.ArgumentParser(description="크로스 축구 - 낙서 공")
     sub = ap.add_subparsers(dest="mode", required=True)
-    sub.add_parser("host", help="왼쪽 사람: 방 열기")
-    j = sub.add_parser("join", help="오른쪽 사람: 접속하기")
+    h = sub.add_parser("host", help="방 열기 (기본: 내가 왼쪽 모니터)")
+    h.add_argument("--me", choices=["left", "right"], default="left",
+                   help="내 모니터가 상대 기준 어느 쪽인지 (기본 left = 내가 왼쪽)")
+    j = sub.add_parser("join", help="접속하기 (왼쪽/오른쪽은 host가 정해 줘요)")
     j.add_argument("ip")
     j.add_argument("code")
     args = ap.parse_args()
@@ -635,7 +641,11 @@ def main():
     if sys.platform != "win32":
         sys.exit("Windows에서만 실행돼요.")
 
-    link = host_wait() if args.mode == "host" else join_to(args.ip, args.code)
+    if args.mode == "host":
+        pass_edge = "right" if args.me == "left" else "left"   # 옆사람 모니터가 있는 쪽 면
+        link = host_wait(pass_edge)
+    else:
+        link, pass_edge = join_to(args.ip, args.code)
     print("연결됐어요! 종료: Ctrl+Shift+Q, 낙서판 숨기기: Ctrl+Shift+P")
 
     import tkinter as tk
@@ -655,7 +665,7 @@ def main():
 
     left, top, right, bottom = win.workarea()
     is_host = args.mode == "host"
-    field = Field(right - left, bottom - top, "right" if is_host else "left")
+    field = Field(right - left, bottom - top, pass_edge)
     field.say("낙서를 그리고 ⚽ 차기!", 4.0)
     overlay = Overlay(root, canvas, win, link, field, (left, top),
                       "#1e6fe0" if is_host else "#e02020", tk)

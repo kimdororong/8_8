@@ -1,7 +1,12 @@
+import io
 import json
 import random
+import threading
+import time
 import unittest
+from contextlib import redirect_stdout
 
+import cross_soccer
 from cross_soccer import (BALL_R, BALL_TTL, GOAL_LEN, MAX_BALLS, STROKE_SCALE, Field,
                           normalize_strokes, sanitize_strokes)
 
@@ -177,6 +182,31 @@ class FieldTest(unittest.TestCase):
         self.a.receive_ball({"y": 0.5, "vx": 0.1, "vy": 0, "col": "red);evil", "s": "zzz"})
         self.assertEqual(self.a.balls[0]["col"], "#333333")
         self.assertEqual(self.a.balls[0]["strokes"], [])
+
+
+class HandshakeTest(unittest.TestCase):
+    def pair(self, host_pass):
+        buf, box = io.StringIO(), {}
+
+        def host():
+            with redirect_stdout(buf):
+                box["link"] = cross_soccer.host_wait(host_pass)
+        threading.Thread(target=host, daemon=True).start()
+        for _ in range(50):                                   # 호스트가 열릴 때까지 대기
+            time.sleep(0.1)
+            lines = [l for l in buf.getvalue().splitlines() if " join " in l]
+            if lines:
+                break
+        code = lines[0].split()[-1]
+        link, joiner_pass = cross_soccer.join_to("127.0.0.1", code)
+        time.sleep(0.2)
+        box["link"].close()
+        link.close()
+        return joiner_pass
+
+    def test_joiner_gets_opposite_side(self):
+        self.assertEqual(self.pair("right"), "left")          # host가 왼쪽 모니터
+        self.assertEqual(self.pair("left"), "right")          # host가 오른쪽 모니터
 
 
 if __name__ == "__main__":
