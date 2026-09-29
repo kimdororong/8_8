@@ -535,24 +535,87 @@ class Win:
         self.u.SetLayeredWindowAttributes(hwnd, r | g << 8 | b << 16, 0, 0x1)   # 이 색은 투명(LWA_COLORKEY)
 
 
+def make_fanfare_wav(path, rate=22050, seconds=2.0):
+    """2초짜리 축하 사운드(빰빠바밤~ + 화음 + 관중 함성)를 WAV 파일로 만들어요."""
+    import array
+    import wave
+    n = int(rate * seconds)
+    buf = [0.0] * n
+
+    def tone(freq, start, dur, vol, fade_out=0.04):
+        i0, i1 = int(start * rate), min(n, int((start + dur) * rate))
+        for i in range(i0, i1):
+            t = (i - i0) / rate
+            env = min(1.0, t / 0.012) * min(1.0, (dur - t) / fade_out)
+            vib = 1 + 0.004 * math.sin(2 * math.pi * 5.5 * t) if dur > 0.5 else 1
+            w = 2 * math.pi * freq * vib * t
+            # 배음을 섞어서 나팔 소리처럼
+            buf[i] += vol * env * (math.sin(w) + 0.5 * math.sin(2 * w) + 0.3 * math.sin(3 * w)
+                                   + 0.15 * math.sin(4 * w))
+
+    # 빰 빠 바 밤~ 빠 밤!
+    for f, st, du in ((392, 0.00, 0.11), (523, 0.12, 0.11), (659, 0.24, 0.11), (784, 0.36, 0.22),
+                      (659, 0.60, 0.10), (784, 0.72, 0.14)):
+        tone(f, st, du, 0.22)
+    for f in (523, 659, 784, 1047):              # 마지막 화음을 길게
+        tone(f, 0.88, seconds - 0.88, 0.12, fade_out=0.7)
+    # 관중 함성: 부드럽게 거른 잡음이 커졌다가 사라져요
+    rng = random.Random(7)
+    lp = 0.0
+    for i in range(int(0.25 * rate), n):
+        t = i / rate
+        lp += 0.08 * (rng.uniform(-1, 1) - lp)
+        env = min(1.0, (t - 0.25) / 0.5) * min(1.0, (seconds - t) / 0.6)
+        buf[i] += 0.45 * env * lp
+
+    peak = max(1e-9, max(abs(v) for v in buf))
+    pcm = array.array("h", (int(v / peak * 0.85 * 32767) for v in buf))
+    if sys.byteorder == "big":
+        pcm.byteswap()
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(pcm.tobytes())
+
+
+_fanfare_path = None
+
+
+def prepare_fanfare():
+    """게임 시작할 때 한 번만 효과음 파일을 만들어 둬요."""
+    global _fanfare_path
+    import os
+    import tempfile
+    try:
+        path = os.path.join(tempfile.gettempdir(), "cross_soccer_fanfare.wav")
+        make_fanfare_wav(path)
+        _fanfare_path = path
+    except OSError:
+        _fanfare_path = None
+
+
 def play_fanfare():
-    """빰빠바밤~ (Windows 기본 삑 소리로)."""
+    """골 먹힌 쪽 스피커로 2초 축하 사운드. 파일이 없으면 삑 소리로 대신해요."""
     try:
         import winsound
     except ImportError:
         return
-    notes = [(523, 110), (659, 110), (784, 110), (1047, 260), (0, 60), (784, 120), (1047, 480)]
+    if _fanfare_path:
+        try:
+            winsound.PlaySound(_fanfare_path, winsound.SND_FILENAME | winsound.SND_ASYNC
+                               | winsound.SND_NODEFAULT)
+            return
+        except RuntimeError:
+            pass
 
-    def run():
-        for freq, ms in notes:
+    def beeps():
+        for freq, ms in ((523, 110), (659, 110), (784, 110), (1047, 260), (784, 120), (1047, 480)):
             try:
-                if freq:
-                    winsound.Beep(freq, ms)
-                else:
-                    time.sleep(ms / 1000)
+                winsound.Beep(freq, ms)
             except RuntimeError:
                 return
-    threading.Thread(target=run, daemon=True).start()
+    threading.Thread(target=beeps, daemon=True).start()
 
 
 class Pad:
@@ -826,6 +889,7 @@ def run_game(tk, win, link, me):
     root.update()
     win.click_through(root, KEY)
 
+    prepare_fanfare()
     left, top, right, bottom = win.workarea()
     field = Field(right - left, bottom - top, other_side(me))
     field.say("낙서를 그리고 ⚽ 차기!", 4.0)

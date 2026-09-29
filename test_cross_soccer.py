@@ -190,6 +190,23 @@ class FieldTest(unittest.TestCase):
         self.assertEqual(self.a.balls[0]["r"], MIN_R)
 
 
+class FanfareSoundTest(unittest.TestCase):
+    def test_two_second_wav(self):
+        import os
+        import tempfile
+        import wave
+        path = os.path.join(tempfile.mkdtemp(), "f.wav")
+        t0 = time.time()
+        cross_soccer.make_fanfare_wav(path)
+        with wave.open(path) as w:
+            secs = w.getnframes() / w.getframerate()
+            data = w.readframes(w.getnframes())
+        self.assertAlmostEqual(secs, 2.0, delta=0.01)
+        self.assertGreater(max(abs(int.from_bytes(data[i:i + 2], "little", signed=True))
+                               for i in range(0, len(data), 2)), 20000)   # 충분히 큰 소리
+        self.assertLess(time.time() - t0, 5)                               # 시작이 느려지지 않게
+
+
 class HandshakeTest(unittest.TestCase):
     def open_room(self, me):
         room = HostRoom(me, port=TEST_PORT)
