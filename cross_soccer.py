@@ -399,6 +399,8 @@ class Win:
         self.u.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_long]
         self.u.GetParent.argtypes = [ctypes.c_void_p]
         self.u.GetParent.restype = ctypes.c_void_p
+        self.u.SetLayeredWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_uint32,
+                                                      ctypes.c_ubyte, ctypes.c_uint32]
         self._pt = wintypes.POINT()
         self._was = {}
 
@@ -422,12 +424,19 @@ class Win:
         self._was[key] = down
         return fired
 
-    def click_through(self, hwnd):
-        for h in {hwnd, self.u.GetParent(hwnd)}:
-            if h:
-                style = self.u.GetWindowLongW(h, -20)
-                # LAYERED | TRANSPARENT(클릭 통과) | TOOLWINDOW(작업표시줄에서 숨김)
-                self.u.SetWindowLongW(h, -20, style | 0x80000 | 0x20 | 0x80)
+    def click_through(self, root, colorkey):
+        """경기장 창을 클릭이 통과하는 투명 창으로 만들어요 (바깥 창 하나에만 적용)."""
+        root.update_idletasks()
+        try:
+            hwnd = int(root.wm_frame(), 16)                 # Tk가 감싼 진짜 최상위 창
+        except (ValueError, TypeError):
+            hwnd = 0
+        hwnd = hwnd or self.u.GetParent(root.winfo_id()) or root.winfo_id()
+        style = self.u.GetWindowLongW(hwnd, -20)
+        # LAYERED | TRANSPARENT(클릭 통과) | TOOLWINDOW(작업표시줄에서 숨김)
+        self.u.SetWindowLongW(hwnd, -20, style | 0x80000 | 0x20 | 0x80)
+        r, g, b = (int(colorkey[i:i + 2], 16) for i in (1, 3, 5))
+        self.u.SetLayeredWindowAttributes(hwnd, r | g << 8 | b << 16, 0, 0x1)   # 이 색은 투명(LWA_COLORKEY)
 
 
 class Pad:
@@ -642,7 +651,7 @@ def main():
     canvas = tk.Canvas(root, width=sw, height=sh, bg=KEY, highlightthickness=0, bd=0)
     canvas.pack()
     root.update()
-    win.click_through(root.winfo_id())
+    win.click_through(root, KEY)
 
     left, top, right, bottom = win.workarea()
     is_host = args.mode == "host"
