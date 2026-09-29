@@ -2,7 +2,7 @@ import json
 import random
 import unittest
 
-from cross_soccer import (BALL_R, BALL_TTL, GOAL_FRAC, MAX_BALLS, STROKE_SCALE, Field,
+from cross_soccer import (BALL_R, BALL_TTL, GOAL_LEN, MAX_BALLS, STROKE_SCALE, Field,
                           normalize_strokes, sanitize_strokes)
 
 W, H = 1920, 1000
@@ -89,28 +89,26 @@ class FieldTest(unittest.TestCase):
         self.assertAlmostEqual(got["y"], 500, delta=5)
 
     def test_only_neighbor_side_is_open(self):
-        # 위·아래(골대 밖)·바깥쪽 벽은 튕기고, 옆사람 쪽 면만 통과
+        # 위·아래·바깥쪽 벽(골대 밖)은 튕기고, 옆사람 쪽 면만 통과
         self.a.balls = [ball(800, 40, 0, -500)]
         run(self.a, 0.3)
         self.assertGreater(self.a.balls[0]["vy"], 0)
         self.a.balls = [ball(900, H - 40, 0, 500)]
         run(self.a, 0.3)
         self.assertLess(self.a.balls[0]["vy"], 0)
-        self.a.balls = [ball(60, 400, -500, 0)]
+        self.a.balls = [ball(60, 300, -500, 0)]           # 바깥쪽 벽, 골대 위쪽
         run(self.a, 0.3)
         self.assertGreater(self.a.balls[0]["vx"], 0)
         self.assertEqual(self.a.out, [])
         self.assertEqual(len(self.a.balls), 1)
 
-    def test_goal_is_bottom_corner_and_narrow(self):
-        g0, g1 = self.a.goal_span
-        self.assertEqual((g0, g1), (0.0, W * GOAL_FRAC))
-        g0, g1 = self.b.goal_span
-        self.assertEqual((g0, g1), (W - W * GOAL_FRAC, float(W)))
-        self.assertLessEqual(GOAL_FRAC, 0.15)
+    def test_goal_is_200px_tall_at_bottom_of_far_wall(self):
+        self.assertEqual(self.a.goal_zone, (H - 200, float(H)))
+        self.assertEqual((self.a.goal_x, self.b.goal_x), (0.0, float(W)))
+        self.assertEqual(GOAL_LEN, 200)
 
     def test_goal_scored_and_synced(self):
-        self.a.balls = [ball(80, H - 100, 0, 600)]           # 왼쪽 아래 골대 위에서 낙하
+        self.a.balls = [ball(150, H - 80, -600, 0)]         # 왼쪽 벽 아래쪽 골대로
         run(self.a, 1.0)
         self.assertEqual(self.a.score_op, 1)
         self.assertIn(("goal",), self.a.out)
@@ -118,19 +116,27 @@ class FieldTest(unittest.TestCase):
         self.b.goal_for_me()
         self.assertEqual(self.b.score_me, 1)
 
-    def test_bottom_outside_goal_bounces(self):
-        self.a.balls = [ball(900, H - 100, 0, 600)]
+    def test_far_wall_above_goal_bounces(self):
+        self.a.balls = [ball(150, H - 300, -600, 0)]        # 골대 바로 위: 튕김
         run(self.a, 1.0)
         self.assertEqual(self.a.score_op, 0)
         self.assertEqual(len(self.a.balls), 1)
 
+    def test_ball_in_goal_zone_cannot_leave_through_bottom(self):
+        self.a.balls = [ball(30, H - 40, 0, 600)]
+        run(self.a, 0.5)
+        self.assertEqual(self.a.score_op, 0)
+        self.assertEqual(len(self.a.balls), 1)
+
     def test_right_player_goal_bottom_right(self):
-        self.b.balls = [ball(W - 80, H - 100, 0, 600)]
+        self.b.balls = [ball(W - 150, H - 80, 600, 0)]
         run(self.b, 1.0)
         self.assertEqual(self.b.score_op, 1)
-        self.b.balls = [ball(80, H - 100, 0, 600)]           # 왼쪽 아래는 골대가 아님
+        self.b.balls = [ball(150, H - 80, -600, 0)]         # 왼쪽은 골대가 아니라 옆사람과 이어진 통로
         run(self.b, 1.0)
         self.assertEqual(self.b.score_op, 1)
+        self.assertEqual(self.b.balls, [])
+        self.assertEqual([e[0] for e in self.b.out].count("ball"), 1)
 
     def test_cursor_bounces_ball_even_when_still(self):
         self.a.balls = [ball(900, 500, 300, 0)]

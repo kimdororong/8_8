@@ -25,8 +25,8 @@ import time
 PORT = 48123
 BALL_R = 34
 CURSOR_R = 7
-GOAL_FRAC = 0.10          # 골대 가로 폭 = 화면 가로의 10%
-GOAL_H = 28               # 골대 그림의 높이(화면에 그려지는 부분)
+GOAL_LEN = 200            # 골대 세로 길이(px). 바깥쪽 벽의 맨 아래에 붙어 있어요
+GOAL_DEPTH = 24           # 골대 그림의 가로 두께(얇게)
 MIN_SPEED = 220.0
 KICK_SPEED = 700.0
 MAX_SPEED = 1500.0
@@ -115,10 +115,14 @@ class Field:
         self.banner_t = 0.0
 
     @property
-    def goal_span(self):
-        """아래쪽 바깥 모서리에 있는 골대의 가로 구간."""
-        gw = self.w * GOAL_FRAC
-        return (0.0, gw) if self.pass_edge == "right" else (self.w - gw, float(self.w))
+    def goal_x(self):
+        """골대가 있는 바깥쪽 벽의 x (옆사람과 이어진 면의 반대쪽)."""
+        return 0.0 if self.pass_edge == "right" else float(self.w)
+
+    @property
+    def goal_zone(self):
+        """바깥쪽 벽 맨 아래 GOAL_LEN 만큼이 골대예요 (세로 구간)."""
+        return (self.h - GOAL_LEN, float(self.h))
 
     def say(self, text, secs=1.5):
         self.banner, self.banner_t = text, secs
@@ -248,20 +252,20 @@ class Field:
         w, h = self.w, self.h
         if b["y"] < BALL_R:
             b["y"], b["vy"] = BALL_R, abs(b["vy"]) * BOUNCE
-        if b["y"] > h - BALL_R:
-            g0, g1 = self.goal_span
-            if g0 <= b["x"] <= g1:               # 골대 구간은 바닥이 뚫려 있어요
-                if b["y"] > h:
-                    return self._conceded()
-            else:
-                b["y"], b["vy"] = h - BALL_R, -abs(b["vy"]) * BOUNCE
+        elif b["y"] > h - BALL_R:
+            b["y"], b["vy"] = h - BALL_R, -abs(b["vy"]) * BOUNCE
+        in_goal = b["y"] >= self.goal_zone[0]
         if self.pass_edge == "right":
-            if b["x"] < BALL_R:
+            if b["x"] < -BALL_R * 0.5 and in_goal:      # 골대 구간은 벽이 뚫려 있어요
+                return self._conceded()
+            if b["x"] < BALL_R and not in_goal:
                 b["x"], b["vx"] = BALL_R, abs(b["vx"]) * BOUNCE
             if b["x"] > w:
                 return self._hand_off(b)
         else:
-            if b["x"] > w - BALL_R:
+            if b["x"] > w + BALL_R * 0.5 and in_goal:
+                return self._conceded()
+            if b["x"] > w - BALL_R and not in_goal:
                 b["x"], b["vx"] = w - BALL_R, -abs(b["vx"]) * BOUNCE
             if b["x"] < 0:
                 return self._hand_off(b)
@@ -428,7 +432,7 @@ class Win:
 
 class Pad:
     """작은 낙서판. 여기에 그린 그림이 공이 돼요."""
-    W, H, BTN_H = 240, 150, 32
+    W, H, BTN_H = 300, 300, 32
     HINT = "여기에 그림을 그리고\n⚽ 차기!"
 
     def __init__(self, tk, root, color, pos, on_fire):
@@ -583,15 +587,16 @@ class Overlay:
 
     def draw_goal(self):
         f, c = self.f, self.c
-        g0, g1 = f.goal_span
-        top = f.h - GOAL_H
-        c.create_rectangle(g0, top, g1, f.h, outline="#e02020", width=4)
-        x = g0 + 12
-        while x < g1:
-            c.create_line(x, top, x, f.h, fill="#e02020")
-            x += 12
-        for y in (top + GOAL_H / 3, top + 2 * GOAL_H / 3):
-            c.create_line(g0, y, g1, y, fill="#e02020")
+        y0, y1 = f.goal_zone
+        gx = f.goal_x
+        x0, x1 = (gx, gx + GOAL_DEPTH) if gx == 0 else (gx - GOAL_DEPTH, gx)
+        c.create_rectangle(x0, y0, x1, y1, outline="#e02020", width=4)
+        y = y0 + 16
+        while y < y1:
+            c.create_line(x0, y, x1, y, fill="#e02020")
+            y += 16
+        for x in (x0 + GOAL_DEPTH / 3, x0 + 2 * GOAL_DEPTH / 3):
+            c.create_line(x, y0, x, y1, fill="#e02020")
 
     def draw_ball(self, b):
         c, x, y, r = self.c, b["x"], b["y"], BALL_R
