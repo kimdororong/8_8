@@ -13,9 +13,14 @@
   python penalty_duel.py join <IP> <코드>
 """
 import argparse
+import base64
+import collections
 import math
+import os
 import random
+import struct
 import sys
+import tempfile
 import threading
 import time
 
@@ -334,7 +339,7 @@ BACK_KICKER, BACK_KEEPER = 175.0, 130.0      # 캐릭터 뒤에서 카메라까�
 PERSON_H = 64.0                    # 캐릭터 키 (세계 단위)
 GOAL_TOP = 60.0                    # 골대 높이
 ASSET_DIR = "assets"               # 여기에 kicker_back.png 등이 있으면 그 그림을 써요
-ASSET_NAMES = ("kicker_back", "kicker_front", "keeper_back", "keeper_front")
+ASSET_NAMES = ("kicker_back", "kicker_front", "keeper_back", "keeper_front", "player_back", "player_front")
 WALK_NAMES = tuple("%s_walk%d" % (n, i) for n in ASSET_NAMES for i in (1, 2))   # 걷는 동작 그림 (선택)
 ALL_ASSET_NAMES = ASSET_NAMES + WALK_NAMES
 KICK_TIME = 0.25
@@ -452,6 +457,60 @@ def load_assets(tk, folder=None):
     return found
 
 
+SHARE_MAX_BYTES = 300_000          # 상대에게 보낼 그림 한 장의 최대 크기 (넘으면 줄여서 보내요)
+SHARE_MAX_B64 = 520_000            # 받을 때 허용하는 글자 수
+SHARE_MAX_PX = 2000                # 받을 그림의 최대 가로/세로
+
+
+def png_size(raw):
+    """PNG 파일 앞부분에서 (가로, 세로)를 읽어요. PNG가 아니면 None."""
+    if len(raw) < 24 or raw[:8] != b"\x89PNG\r\n\x1a\n" or raw[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", raw[16:24])
+
+
+def read_share_bytes(tk, path):
+    """보낼 PNG 내용. 너무 크면 Tk로 줄여서 만들어요. 못 보내는 그림이면 None."""
+    with open(path, "rb") as f:
+        raw = f.read()
+    size = png_size(raw)
+    if not size:
+        return None
+    big = max(size)
+    if len(raw) <= SHARE_MAX_BYTES and big <= SHARE_MAX_PX:
+        return raw
+    try:
+        img = tk.PhotoImage(file=path)
+    except tk.TclError:
+        return None
+    start = max(1, -(-big // 1600))
+    for f in range(start, start + 8):
+        tmp = os.path.join(tempfile.gettempdir(), "penalty_share_%d.png" % os.getpid())
+        try:
+            img.subsample(f).write(tmp, format="png")
+            with open(tmp, "rb") as fh:
+                data = fh.read()
+        except (tk.TclError, OSError):
+            return None
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        if len(data) <= SHARE_MAX_BYTES:
+            return data
+    return None
+
+
+def changed_names(old_sig, new_sig):
+    return [n for (n, m1, s1), (_, m2, s2) in zip(old_sig, new_sig) if (m1, s1) != (m2, s2)]
+
+
+def resolve_names(role, kind, suffix=""):
+    """역할별 그림이 없으면 공통 그림(player_*)을 써요."""
+    return ["%s_%s%s" % (role, kind, suffix), "player_%s%s" % (kind, suffix)]
+
+
 def assets_signature(folder=None):
     """assets 폴더의 그림 파일이 바뀌었는지 알아보기 위한 (이름, 수정시각, 크기) 목록."""
     import os
@@ -483,8 +542,11 @@ class App:
         self.asset_dir = asset_dir
         self.assets = load_assets(tk, asset_dir)
         self.asset_sig = assets_signature(asset_dir)
+        self.peer_assets = {}                                    # 상대가 보내 준 캐릭터 그림
+        self.share_queue = collections.deque()
         self.img_cache, self.img_refs = {}, []
         self.frame_n, self.toast, self.toast_until = 0, "", 0.0
+        self.queue_share([n for n, m, _ in self.asset_sig if m is not None])
         self.walkers = {"kicker": Walker(), "keeper": Walker()}
         self.prev_shot, self.anim_t = False, time.monotonic()
         rng = random.Random(5)
@@ -529,11 +591,54 @@ class App:
     def on_release(self, e):
         self.keys.discard({"r": "r", "R": "r", "s": "s", "S": "s"}.get(e.keysym, e.keysym))
 
+    def queue_share(self, names):
+        """바뀐 내 그림을 상대에게 보낼 목록에 넣어요. 지운 그림은 지웠다고 알려요."""
+        folder = self.asset_dir or os.path.join(os.path.dirname(os.path.abspath(__file__)), ASSET_DIR)
+        for name in names:
+            path = os.path.join(folder, name + ".png")
+            data = None
+            if os.path.isfile(path):
+                try:
+                    raw = read_share_bytes(self.tk, path)
+                except OSError:
+                    raw = None
+                if raw is None:
+                    continue
+                data = base64.b64encode(raw).decode("ascii")
+            self.share_queue = collections.deque(x for x in self.share_queue if x[0] != name)
+            self.share_queue.append((name, data))
+
+    def recv_asset(self, m):
+        """상대가 보낸 캐릭터 그림을 검사하고 받아요."""
+        name, data = m.get("name"), m.get("data")
+        if name not in ALL_ASSET_NAMES:
+            return
+        if data is None:
+            self.peer_assets.pop(name, None)
+        else:
+            if not isinstance(data, str) or len(data) > SHARE_MAX_B64:
+                return
+            try:
+                raw = base64.b64decode(data, validate=True)
+            except ValueError:
+                return
+            size = png_size(raw)
+            if not size or not (0 < size[0] <= SHARE_MAX_PX and 0 < size[1] <= SHARE_MAX_PX):
+                return
+            try:
+                self.peer_assets[name] = self.tk.PhotoImage(master=self.root, data=data)
+            except self.tk.TclError:
+                return
+            self.toast, self.toast_until = "상대 캐릭터 그림을 받았어요", time.monotonic() + 2.5
+        for key in [k for k in self.img_cache if k[0] == "peer:" + name]:
+            self.img_cache.pop(key)
+
     def reload_assets(self, force=False):
-        """캐릭터 그림 파일이 바뀌었으면(또는 F5) 다시 불러와요."""
+        """캐릭터 그림 파일이 바뀌었으면(또는 F5) 다시 불러오고 상대에게도 보내요."""
         sig = assets_signature(self.asset_dir)
         if sig == self.asset_sig and not force:
             return False
+        self.queue_share([n for n, m, _ in sig] if force else changed_names(self.asset_sig, sig))
         self.asset_sig = sig
         self.assets = load_assets(self.tk, self.asset_dir)
         self.img_cache.clear()
@@ -577,6 +682,8 @@ class App:
             if t == "bye":
                 self.state = self.state or {}
                 self.root.after(100, self.opponent_left)
+            elif t == "asset":
+                self.recv_asset(m)
             elif t == "in" and self.is_host:
                 for key in self.remote_in:
                     try:
@@ -591,6 +698,9 @@ class App:
             self.link.send(t="st", **self.state)
         else:
             self.link.send(t="in", **self.my_input())
+        if self.share_queue and self.frame_n % 3 == 0:            # 그림은 조금씩 나눠서 보내요
+            name, data = self.share_queue.popleft()
+            self.link.send(t="asset", name=name, data=data)
         if self.state and "ph" in self.state:
             self.react(self.state)
             self.draw(self.state)
@@ -745,20 +855,33 @@ class App:
                                  (ex - px * 14, ey - py * 14)]), "#ffe14a")
 
     # --- 캐릭터 (assets/ 그림이 있으면 그 그림, 없으면 코드로 그린 캐릭터)
-    def sprite(self, name, target_h):
-        base = self.assets.get(name)
-        if not base:
+    def pick_image(self, role, kind, suffix=""):
+        """이 캐릭터에 쓸 그림. 내 캐릭터(뒷모습)는 내 그림, 상대(앞모습)는 상대가 보낸 그림을 먼저 써요."""
+        names = resolve_names(role, kind, suffix)
+        if kind == "back":
+            sources = (("me:", self.assets),)
+        else:
+            sources = (("peer:", self.peer_assets), ("me:", self.assets))
+        for prefix, pool in sources:
+            for n in names:
+                if n in pool:
+                    return prefix + n, pool[n]
+        return None
+
+    def sprite(self, pick, target_h):
+        if not pick:
             return None
+        key, base = pick
         a, b = best_fraction(max(0.05, target_h / max(1, base.height())))
-        key = (name, a, b)
-        img = self.img_cache.get(key)
+        ck = (key, a, b)
+        img = self.img_cache.get(ck)
         if img is None:
             img = base.zoom(a) if a > 1 else base
             img = img.subsample(b) if b > 1 else img
             if len(self.img_cache) > 80:
                 self.img_cache.clear()
                 self.img_refs.clear()
-            self.img_cache[key] = img
+            self.img_cache[ck] = img
             self.img_refs.append(img)
         return img
 
@@ -774,12 +897,10 @@ class App:
         if dashing:                                                            # 다이빙 잔상
             for i in (1, 2, 3):
                 self.line([px - i * h * 0.16, py - h * 0.6, px - i * h * 0.16 - h * 0.2, py - h * 0.6], "#ffffff", 2)
-        name = "%s_%s" % (role, kind)
+        pick = None
         if w.amp > 0.35:                                                       # 걷는 동작 그림이 있으면 번갈아 써요
-            alt = "%s_walk%d" % (name, 1 if math.sin(w.phase) > 0 else 2)
-            if alt in self.assets:
-                name = alt
-        img = self.sprite(name, h * self.s)
+            pick = self.pick_image(role, kind, "_walk%d" % (1 if math.sin(w.phase) > 0 else 2))
+        img = self.sprite(pick or self.pick_image(role, kind), h * self.s)
         if img:
             self.c.create_image(self.sx(px), self.sy(py - bob), image=img, anchor="s")
             return

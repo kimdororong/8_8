@@ -387,6 +387,32 @@ class WalkerTest(unittest.TestCase):
         self.assertEqual(w.kick, pd.KICK_TIME)
 
 
+class ShareHelpersTest(unittest.TestCase):
+    PNG = (b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + (300).to_bytes(4, "big") + (600).to_bytes(4, "big")
+           + b"\x08\x06\x00\x00\x00")
+
+    def test_png_size(self):
+        self.assertEqual(pd.png_size(self.PNG), (300, 600))
+        self.assertIsNone(pd.png_size(b"hello world, not a png at all!!"))
+        self.assertIsNone(pd.png_size(b""))
+        self.assertIsNone(pd.png_size(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4 + b"XXXX" + b"\x00" * 8))
+
+    def test_resolve_names_prefers_role_then_player(self):
+        self.assertEqual(pd.resolve_names("keeper", "back"), ["keeper_back", "player_back"])
+        self.assertEqual(pd.resolve_names("kicker", "front", "_walk2"), ["kicker_front_walk2", "player_front_walk2"])
+
+    def test_changed_names(self):
+        a = (("kicker_back", None, None), ("kicker_front", 5, 10), ("keeper_back", 7, 9))
+        b = (("kicker_back", 1, 2), ("kicker_front", 5, 10), ("keeper_back", None, None))
+        self.assertEqual(pd.changed_names(a, b), ["kicker_back", "keeper_back"])
+        self.assertEqual(pd.changed_names(a, a), [])
+
+    def test_asset_names_cover_player_and_walk(self):
+        self.assertIn("player_back", pd.ASSET_NAMES)
+        self.assertIn("player_front_walk2", pd.ALL_ASSET_NAMES)
+        self.assertEqual(len(pd.ALL_ASSET_NAMES), len(set(pd.ALL_ASSET_NAMES)))
+
+
 class AssetSignatureTest(unittest.TestCase):
     def test_signature_changes_when_file_added_or_changed(self):
         import os
