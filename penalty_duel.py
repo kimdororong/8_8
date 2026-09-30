@@ -335,11 +335,42 @@ PERSON_H = 64.0                    # 캐릭터 키 (세계 단위)
 GOAL_TOP = 60.0                    # 골대 높이
 ASSET_DIR = "assets"               # 여기에 kicker_back.png 등이 있으면 그 그림을 써요
 ASSET_NAMES = ("kicker_back", "kicker_front", "keeper_back", "keeper_front")
+WALK_NAMES = tuple("%s_walk%d" % (n, i) for n in ASSET_NAMES for i in (1, 2))   # 걷는 동작 그림 (선택)
+ALL_ASSET_NAMES = ASSET_NAMES + WALK_NAMES
+KICK_TIME = 0.25
 OTHER_COLOR = {"kicker": "#2f6fe0", "keeper": "#f2a20c"}
 
 
 def pick_scale(screen_w, screen_h):
     return min(1.0, (screen_h - 110) / VIEW_H, (screen_w - 40) / VIEW_W)
+
+
+class Walker:
+    """캐릭터가 움직이는 만큼 걸음 위상(phase)과 세기(amp)를 계산해요. 다리 움직임에 써요."""
+
+    def __init__(self):
+        self.x = self.y = None
+        self.phase, self.amp, self.kick = 0.0, 0.0, 0.0
+
+    def update(self, x, y, dt):
+        if self.x is None:
+            self.x, self.y = x, y
+        d = math.hypot(x - self.x, y - self.y)
+        self.x, self.y = x, y
+        moving = d / max(dt, 1e-3) > 25
+        self.amp += ((1.0 if moving else 0.0) - self.amp) * min(1.0, dt * 12)
+        self.phase += d * 0.085
+        self.kick = max(0.0, self.kick - dt)
+
+    def kicked(self):
+        self.kick = KICK_TIME
+
+    def swing(self, side):
+        """side=-1(왼다리) / +1(오른다리)의 발 들림 0~1."""
+        return max(0.0, math.sin(self.phase + (0.0 if side < 0 else math.pi))) * self.amp
+
+    def bob(self):
+        return abs(math.sin(self.phase)) * self.amp
 
 
 class View:
@@ -411,7 +442,7 @@ def load_assets(tk, folder=None):
     import os
     folder = folder or os.path.join(os.path.dirname(os.path.abspath(__file__)), ASSET_DIR)
     found = {}
-    for name in ASSET_NAMES:
+    for name in ALL_ASSET_NAMES:
         path = os.path.join(folder, name + ".png")
         if os.path.isfile(path):
             try:
@@ -426,7 +457,7 @@ def assets_signature(folder=None):
     import os
     folder = folder or os.path.join(os.path.dirname(os.path.abspath(__file__)), ASSET_DIR)
     sig = []
-    for name in ASSET_NAMES:
+    for name in ALL_ASSET_NAMES:
         path = os.path.join(folder, name + ".png")
         try:
             st = os.stat(path)
@@ -454,6 +485,8 @@ class App:
         self.asset_sig = assets_signature(asset_dir)
         self.img_cache, self.img_refs = {}, []
         self.frame_n, self.toast, self.toast_until = 0, "", 0.0
+        self.walkers = {"kicker": Walker(), "keeper": Walker()}
+        self.prev_shot, self.anim_t = False, time.monotonic()
         rng = random.Random(5)
         self.crowd = [(rng.uniform(0, VIEW_W), rng.uniform(0, 52), rng.choice(
             ("#d9534f", "#f0ad4e", "#5bc0de", "#f7f7f7", "#9b59b6", "#2ecc71"))) for _ in range(160)]
@@ -505,7 +538,8 @@ class App:
         self.assets = load_assets(self.tk, self.asset_dir)
         self.img_cache.clear()
         self.img_refs.clear()
-        self.toast = "캐릭터 그림을 다시 불러왔어요 (%d/%d)" % (len(self.assets), len(ASSET_NAMES))
+        self.toast = "캐릭터 그림을 다시 불러왔어요 (%d/%d)" % (
+            sum(1 for n in self.assets if n in ASSET_NAMES), len(ASSET_NAMES))
         self.toast_until = time.monotonic() + 2.5
         return True
 
@@ -734,36 +768,48 @@ class App:
             return
         px, py, k = p
         h = PERSON_H * k
+        w = self.walkers[role]
+        bob = w.bob() * h * 0.03                                               # 걸을 때 몸이 통통 튀어요
         self.oval(px, py, h * 0.3, h * 0.06, "#1d5a26")                        # 그림자
-        img = self.sprite("%s_%s" % (role, kind), h * self.s)
+        if dashing:                                                            # 다이빙 잔상
+            for i in (1, 2, 3):
+                self.line([px - i * h * 0.16, py - h * 0.6, px - i * h * 0.16 - h * 0.2, py - h * 0.6], "#ffffff", 2)
+        name = "%s_%s" % (role, kind)
+        if w.amp > 0.35:                                                       # 걷는 동작 그림이 있으면 번갈아 써요
+            alt = "%s_walk%d" % (name, 1 if math.sin(w.phase) > 0 else 2)
+            if alt in self.assets:
+                name = alt
+        img = self.sprite(name, h * self.s)
         if img:
-            self.c.create_image(self.sx(px), self.sy(py), image=img, anchor="s")
+            self.c.create_image(self.sx(px), self.sy(py - bob), image=img, anchor="s")
             return
         keeper = role == "keeper"
         shirt = KEEPER_COLOR if keeper else KICKER_COLOR
         shirt_dark = "#7a4b00" if keeper else "#12336e"
         shorts = "#222222" if keeper else "#f2f2f2"
         skin, hair = "#f0c9a0", "#3b2a1c"
-        if dashing:                                                            # 다이빙 잔상
-            for i in (1, 2, 3):
-                self.line([px - i * h * 0.16, py - h * 0.6, px - i * h * 0.16 - h * 0.2, py - h * 0.6], "#ffffff", 2)
+        kick = math.sin(math.pi * (1 - w.kick / KICK_TIME)) if w.kick > 0 else 0.0
+        top = py - bob                                                         # 몸통 기준선 (다리는 땅에 붙어요)
         for sxl in (-1, 1):                                                    # 다리 + 양말
-            self.rect(px + sxl * h * 0.1 - h * 0.05, py - h * 0.3, px + sxl * h * 0.1 + h * 0.05, py - h * 0.08, skin)
-            self.rect(px + sxl * h * 0.1 - h * 0.055, py - h * 0.12, px + sxl * h * 0.1 + h * 0.055, py, shirt)
-        self.rect(px - h * 0.2, py - h * 0.4, px + h * 0.2, py - h * 0.26, shorts, "#666", 1)   # 반바지
-        self.poly([px - h * 0.2, py - h * 0.4, px + h * 0.2, py - h * 0.4, px + h * 0.26, py - h * 0.72,
-                   px - h * 0.26, py - h * 0.72], shirt, shirt_dark)                      # 상의
-        for sxl in (-1, 1):                                                    # 팔
+            lift = w.swing(sxl) * h * 0.1 + (kick * h * 0.2 if sxl == 1 else 0.0)
+            lx = px + sxl * h * 0.1
+            self.rect(lx - h * 0.05, top - h * 0.3, lx + h * 0.05, py - h * 0.08 - lift, skin)
+            self.rect(lx - h * 0.055, py - h * 0.12 - lift, lx + h * 0.055, py - lift, shirt)
+        self.rect(px - h * 0.2, top - h * 0.4, px + h * 0.2, top - h * 0.26, shorts, "#666", 1)   # 반바지
+        self.poly([px - h * 0.2, top - h * 0.4, px + h * 0.2, top - h * 0.4, px + h * 0.26, top - h * 0.72,
+                   px - h * 0.26, top - h * 0.72], shirt, shirt_dark)                      # 상의
+        for sxl in (-1, 1):                                                    # 팔 (다리와 반대로 흔들려요)
             ax = px + sxl * h * 0.31
-            self.rect(ax - h * 0.05, py - h * 0.72, ax + h * 0.05, py - h * 0.44, shirt, shirt_dark)
+            sw = w.swing(-sxl) * h * 0.06
+            self.rect(ax - h * 0.05, top - h * 0.72, ax + h * 0.05, top - h * 0.44 - sw, shirt, shirt_dark)
             if keeper:
-                self.oval(ax, py - h * 0.42, h * 0.075, h * 0.075, "white", "#555", 1)   # 장갑
+                self.oval(ax, top - h * 0.42 - sw, h * 0.075, h * 0.075, "white", "#555", 1)   # 장갑
             else:
-                self.oval(ax, py - h * 0.42, h * 0.05, h * 0.05, skin)
-        hy = py - h * 0.85
+                self.oval(ax, top - h * 0.42 - sw, h * 0.05, h * 0.05, skin)
+        hy = top - h * 0.85
         self.oval(px, hy, h * 0.135, h * 0.135, hair if kind == "back" else skin, "#222", 1.5)
         if kind == "back":
-            self.text(px, py - h * 0.56, "1" if keeper else "9", max(8, int(h * 0.2)), "white", outline=False)
+            self.text(px, top - h * 0.56, "1" if keeper else "9", max(8, int(h * 0.2)), "white", outline=False)
             for sxl in (-1, 1):                                                # 귀
                 self.oval(px + sxl * h * 0.135, hy + h * 0.01, h * 0.03, h * 0.04, skin)
         else:
@@ -777,6 +823,19 @@ class App:
         if kind == "back":                                                     # 내 캐릭터 표시
             self.text(px, py + h * 0.13, "▲ 나", max(8, int(h * 0.14)), "#ffe14a")
 
+    def animate(self, st):
+        """상태가 바뀔 때마다 걷기/차기 애니메이션 값을 갱신해요."""
+        now = time.monotonic()
+        dt, self.anim_t = min(now - self.anim_t, 0.1), now
+        self.walkers["kicker"].update(st["k"][0], st["k"][1], dt)
+        gw = self.walkers["keeper"]
+        gw.update(st["g"][0], st["g"][1], dt)
+        if st["g"][2]:
+            gw.amp = 1.0
+        if st.get("shot") and not self.prev_shot:
+            self.walkers["kicker"].kicked()
+        self.prev_shot = bool(st.get("shot"))
+
     # --- 전체 그리기
     def draw(self, st):
         c = self.c
@@ -784,6 +843,7 @@ class App:
         self.s = min(cw / VIEW_W, ch / VIEW_H)
         self.ox, self.oy = (cw - VIEW_W * self.s) / 2, (ch - VIEW_H * self.s) / 2
         c.delete("all")
+        self.animate(st)
         me_kicker = self.i_am_kicker()
         k, g = st["k"], st["g"]
         if me_kicker:

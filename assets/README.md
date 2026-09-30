@@ -28,3 +28,11 @@
 
 > 내 화면에서는 내 `assets` 폴더의 그림이 쓰여요. 상대 화면에서 내 캐릭터가 같은 그림으로 보이게 하려면
 > 상대도 같은 PNG를 자기 `assets` 폴더에 넣어야 해요.
+
+## 걷는 동작 그림 (선택)
+움직일 때 다리가 움직이는 걸 직접 그린 그림으로 보이게 하려면, 위 4개 이름 뒤에 `_walk1`, `_walk2`를 붙인
+그림을 더 넣으세요. 걷는 동안 `walk1`과 `walk2`가 번갈아 나와요. (예: `kicker_back_walk1.png`, `kicker_back_walk2.png`)
+
+- 없으면: 기본 캐릭터는 다리가 번갈아 올라가고, 넣은 그림은 걸을 때 통통 튀어요.
+- `walk1`, `walk2`는 서 있는 그림과 **같은 크기·같은 발 위치**로 내보내야 해요.
+- 파일: `kicker_back_walk1/2`, `kicker_front_walk1/2`, `keeper_back_walk1/2`, `keeper_front_walk1/2`

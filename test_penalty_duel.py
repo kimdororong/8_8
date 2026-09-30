@@ -361,6 +361,32 @@ class ViewTest(unittest.TestCase):
         self.assertAlmostEqual(a / b, 2.4, delta=0.15)
 
 
+class WalkerTest(unittest.TestCase):
+    def test_walking_moves_legs_and_standing_stops(self):
+        w = pd.Walker()
+        x = 100.0
+        lifts = set()
+        for _ in range(60):                       # 1초 동안 걷기 (초당 250px)
+            x += 250 / 60
+            w.update(x, 300.0, 1 / 60)
+            lifts.add((round(w.swing(-1), 1), round(w.swing(1), 1)))
+        self.assertGreater(w.amp, 0.8)
+        self.assertGreater(len(lifts), 4)          # 다리가 번갈아 올라가요
+        self.assertGreater(w.phase, 10)
+        for _ in range(60):                        # 멈추면 다리도 멈춰요
+            w.update(x, 300.0, 1 / 60)
+        self.assertLess(w.amp, 0.05)
+        self.assertLess(w.bob(), 0.05)
+
+    def test_legs_alternate(self):
+        w = pd.Walker()
+        w.amp, w.phase = 1.0, 1.0
+        a, b = w.swing(-1), w.swing(1)
+        self.assertTrue((a > 0) != (b > 0) or (a == 0 and b == 0))
+        w.kicked()
+        self.assertEqual(w.kick, pd.KICK_TIME)
+
+
 class AssetSignatureTest(unittest.TestCase):
     def test_signature_changes_when_file_added_or_changed(self):
         import os
