@@ -361,6 +361,23 @@ class ViewTest(unittest.TestCase):
         self.assertAlmostEqual(a / b, 2.4, delta=0.15)
 
 
+class AssetSignatureTest(unittest.TestCase):
+    def test_signature_changes_when_file_added_or_changed(self):
+        import os
+        import tempfile
+        folder = tempfile.mkdtemp()
+        s0 = pd.assets_signature(folder)
+        self.assertTrue(all(m is None for _, m, _ in s0))
+        path = os.path.join(folder, "keeper_back.png")
+        open(path, "wb").write(b"x")
+        s1 = pd.assets_signature(folder)
+        self.assertNotEqual(s0, s1)
+        open(path, "wb").write(b"xyz")
+        self.assertNotEqual(s1, pd.assets_signature(folder))
+        open(os.path.join(folder, "other.png"), "wb").write(b"x")            # 이름이 다른 파일은 무시
+        self.assertEqual(pd.assets_signature(folder), pd.assets_signature(folder))
+
+
 class StateTest(unittest.TestCase):
     def test_state_is_json_and_small(self):
         m, d = new_match()

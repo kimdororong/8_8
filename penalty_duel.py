@@ -421,8 +421,23 @@ def load_assets(tk, folder=None):
     return found
 
 
+def assets_signature(folder=None):
+    """assets 폴더의 그림 파일이 바뀌었는지 알아보기 위한 (이름, 수정시각, 크기) 목록."""
+    import os
+    folder = folder or os.path.join(os.path.dirname(os.path.abspath(__file__)), ASSET_DIR)
+    sig = []
+    for name in ASSET_NAMES:
+        path = os.path.join(folder, name + ".png")
+        try:
+            st = os.stat(path)
+            sig.append((name, st.st_mtime_ns, st.st_size))
+        except OSError:
+            sig.append((name, None, None))
+    return tuple(sig)
+
+
 class App:
-    def __init__(self, tk, root, link, is_host):
+    def __init__(self, tk, root, link, is_host, asset_dir=None):
         self.tk, self.root, self.link, self.is_host = tk, root, link, is_host
         self.me = "host" if is_host else "guest"
         self.match = Match() if is_host else None
@@ -434,8 +449,11 @@ class App:
         self.last = time.monotonic()
         self.prev_phase, self.prev_round = None, -1
         self.s, self.ox, self.oy = 1.0, 0.0, 0.0
-        self.assets = load_assets(tk)
+        self.asset_dir = asset_dir
+        self.assets = load_assets(tk, asset_dir)
+        self.asset_sig = assets_signature(asset_dir)
         self.img_cache, self.img_refs = {}, []
+        self.frame_n, self.toast, self.toast_until = 0, "", 0.0
         rng = random.Random(5)
         self.crowd = [(rng.uniform(0, VIEW_W), rng.uniform(0, 52), rng.choice(
             ("#d9534f", "#f0ad4e", "#5bc0de", "#f7f7f7", "#9b59b6", "#2ecc71"))) for _ in range(160)]
@@ -458,7 +476,9 @@ class App:
         k = e.keysym
         if k == "Escape":
             return self.quit()
-        if k == "F11":
+        if k == "F5":
+            self.reload_assets(force=True)
+        elif k == "F11":
             self.fullscreen = not self.fullscreen
             self.root.attributes("-fullscreen", self.fullscreen)
         elif k in ("Up", "Down", "Left", "Right"):
@@ -475,6 +495,19 @@ class App:
 
     def on_release(self, e):
         self.keys.discard({"r": "r", "R": "r", "s": "s", "S": "s"}.get(e.keysym, e.keysym))
+
+    def reload_assets(self, force=False):
+        """캐릭터 그림 파일이 바뀌었으면(또는 F5) 다시 불러와요."""
+        sig = assets_signature(self.asset_dir)
+        if sig == self.asset_sig and not force:
+            return False
+        self.asset_sig = sig
+        self.assets = load_assets(self.tk, self.asset_dir)
+        self.img_cache.clear()
+        self.img_refs.clear()
+        self.toast = "캐릭터 그림을 다시 불러왔어요 (%d/%d)" % (len(self.assets), len(ASSET_NAMES))
+        self.toast_until = time.monotonic() + 2.5
+        return True
 
     def i_am_kicker(self):
         st = self.state
@@ -502,6 +535,9 @@ class App:
             return
         now = time.monotonic()
         dt, self.last = min(now - self.last, 0.05), now
+        self.frame_n += 1
+        if self.frame_n % 45 == 0:                               # 0.7초마다 그림 파일이 바뀌었는지 봐요
+            self.reload_assets()
         for m in self.link.poll():
             t = m.get("t")
             if t == "bye":
@@ -768,6 +804,8 @@ class App:
         kt = st.get("kt", [0, 0])
         self.text(12, 42, "내 슛 %d/%d  ·  상대 슛 %d/%d" % (kt[mine_i], st["tot"] // 2, kt[1 - mine_i], st["tot"] // 2),
                   10, "#dfe", anchor="w")
+        if time.monotonic() < self.toast_until:
+            self.text(VIEW_W / 2, VIEW_H - 50, self.toast, 12, "#9dffb0")
         ph, res = st["ph"], st.get("res")
         swap_note = "S 키: 공수교대" + ("  (다음 판 교대 예약됨)" if st.get("sw") else "")
         if ph == "ready":
