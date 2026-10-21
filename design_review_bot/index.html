@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>디자인 컨펌 봇</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--text:#1c1f26;--sub:#5b6270;--line:#e1e4ea;--accent:#3b5bdb;
+--ok:#1b7f4b;--okbg:#e3f6ea;--warn:#9a6700;--warnbg:#fff3cd;--bad:#b42318;--badbg:#fde8e6}
+@media(prefers-color-scheme:dark){:root{--bg:#14161a;--card:#1d2026;--text:#eceef2;--sub:#a3a9b5;--line:#31353e;--accent:#8fa5ff;
+--ok:#6ee7a0;--okbg:#17352a;--warn:#f5c451;--warnbg:#3a2f12;--bad:#ff8b80;--badbg:#3d1a17}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,"Apple SD Gothic Neo","Noto Sans KR",sans-serif}
+main{max-width:960px;margin:0 auto;padding:24px 16px 64px}
+h1{font-size:1.5rem;margin:0 0 4px}.lead{color:var(--sub);margin:0 0 20px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:720px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.drop{border:2px dashed var(--line);border-radius:10px;min-height:220px;display:grid;place-items:center;text-align:center;color:var(--sub);cursor:pointer;padding:12px}
+.drop.over{border-color:var(--accent)}.drop img{max-width:100%;max-height:380px;border-radius:6px}
+label{display:block;font-weight:600;margin:14px 0 6px}
+textarea,input[type=text]{width:100%;border:1px solid var(--line);border-radius:8px;padding:10px;background:var(--bg);color:var(--text);font:inherit}
+.checks label{display:flex;gap:8px;font-weight:400;margin:6px 0;align-items:center}
+button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 20px;font:inherit;font-weight:600;cursor:pointer;min-height:44px;width:100%;margin-top:16px}
+button:disabled{opacity:.55;cursor:wait}button:focus-visible,.drop:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+#result{margin-top:20px}.verdict{border-radius:12px;padding:16px;font-weight:700;font-size:1.15rem}
+.v-approved{background:var(--okbg);color:var(--ok)}.v-conditional{background:var(--warnbg);color:var(--warn)}.v-changes_requested{background:var(--badbg);color:var(--bad)}
+.verdict p{font-weight:400;color:var(--text);margin:6px 0 0;font-size:1rem}
+.issue{border-left:4px solid var(--line);padding:8px 12px;margin:10px 0;background:var(--bg);border-radius:0 8px 8px 0}
+.issue.blocker{border-color:var(--bad)}.issue.major{border-color:var(--warn)}.issue.minor{border-color:var(--sub)}
+.tag{display:inline-block;font-size:.78rem;font-weight:700;padding:1px 8px;border-radius:99px;margin-right:6px;background:var(--line)}
+.issue small{color:var(--sub)}.err{color:var(--bad);margin-top:12px}
+</style>
+</head>
+<body>
+<main>
+  <h1>🎨 디자인 컨펌 봇</h1>
+  <p class="lead">화면 스크린샷을 올리면 UX·접근성·디자인 시스템·카피 기준으로 피드백하고 컨펌 여부를 판정해요.</p>
+  <div class="grid">
+    <section class="card" aria-label="디자인 업로드">
+      <div class="drop" id="drop" tabindex="0" role="button" aria-label="이미지 선택 또는 붙여넣기">
+        <span id="hint">여기를 클릭하거나 이미지를 끌어다 놓기<br>(Ctrl+V 붙여넣기도 돼요)</span>
+      </div>
+      <input type="file" id="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+    </section>
+    <section class="card" aria-label="리뷰 설정">
+      <label for="ctx">화면 설명 (선택)</label>
+      <input type="text" id="ctx" placeholder="예: 모바일 결제 완료 화면, 30대 직장인 대상">
+      <label>평가 기준</label>
+      <div class="checks" id="criteria">
+        <label><input type="checkbox" value="usability" checked> 사용성/UX 휴리스틱</label>
+        <label><input type="checkbox" value="a11y" checked> 접근성 (WCAG)</label>
+        <label><input type="checkbox" value="system" checked> 디자인 시스템 준수</label>
+        <label><input type="checkbox" value="copy" checked> UX 카피</label>
+      </div>
+      <label for="rules">우리 팀 디자인 규칙 (선택)</label>
+      <textarea id="rules" rows="4" placeholder="예: 메인 컬러 #3B5BDB, 본문 16px, 간격은 8px 배수, 버튼 높이 48px"></textarea>
+      <button id="go" disabled>리뷰 받기</button>
+    </section>
+  </div>
+  <div id="result" aria-live="polite"></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const SEV = {blocker: "필수 수정", major: "수정 권장", minor: "다듬기"};
+const CAT = {usability: "UX", a11y: "접근성", system: "디자인 시스템", copy: "카피"};
+const VERDICT = {approved: "✅ 컨펌", conditional: "🟡 조건부 컨펌", changes_requested: "🔴 수정 후 재요청"};
+let image = null;
+
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;   // 모델 출력은 textContent로만 넣어 XSS 방지
+  return e;
+}
+function setImage(file) {
+  if (!file || !file.type.startsWith("image/")) return;
+  const r = new FileReader();
+  r.onload = () => {
+    image = r.result;
+    const img = el("img"); img.src = image; img.alt = "업로드한 디자인";
+    $("drop").replaceChildren(img);
+    $("go").disabled = false;
+  };
+  r.readAsDataURL(file);
+}
+$("drop").onclick = () => $("file").click();
+$("drop").onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("file").click(); } };
+$("file").onchange = e => setImage(e.target.files[0]);
+$("drop").ondragover = e => { e.preventDefault(); $("drop").classList.add("over"); };
+$("drop").ondragleave = () => $("drop").classList.remove("over");
+$("drop").ondrop = e => { e.preventDefault(); $("drop").classList.remove("over"); setImage(e.dataTransfer.files[0]); };
+document.onpaste = e => { for (const it of e.clipboardData.items) if (it.type.startsWith("image/")) setImage(it.getAsFile()); };
+
+function render(r) {
+  const box = $("result"); box.replaceChildren();
+  const v = el("div", "verdict v-" + r.verdict, VERDICT[r.verdict]);
+  v.append(el("p", null, r.summary)); box.append(v);
+  const card = el("div", "card"); card.style.marginTop = "16px";
+  if (r.strengths.length) {
+    card.append(el("h2", null, "👍 좋은 점"));
+    const ul = el("ul"); r.strengths.forEach(s => ul.append(el("li", null, s))); card.append(ul);
+  }
+  card.append(el("h2", null, `🛠 개선할 점 (${r.issues.length})`));
+  if (!r.issues.length) card.append(el("p", null, "지적할 문제가 없어요."));
+  const order = {blocker: 0, major: 1, minor: 2};
+  r.issues.sort((a, b) => order[a.severity] - order[b.severity]).forEach(i => {
+    const d = el("div", "issue " + i.severity);
+    const head = el("div"); head.append(el("span", "tag", SEV[i.severity]), el("span", "tag", CAT[i.category] || "기타"));
+    head.append(el("small", null, i.location || ""));
+    d.append(head, el("div", null, i.problem || ""), el("div", null, "→ " + (i.fix || "")));
+    card.append(d);
+  });
+  box.append(card);
+}
+$("go").onclick = async () => {
+  $("go").disabled = true; $("go").textContent = "분석 중…"; $("result").replaceChildren();
+  try {
+    const res = await fetch("/api/review", {method: "POST", headers: {"content-type": "application/json"}, body: JSON.stringify({
+      image, context: $("ctx").value, rules: $("rules").value,
+      criteria: [...document.querySelectorAll("#criteria input:checked")].map(c => c.value)})});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || "요청 실패");
+    render(data);
+  } catch (e) { $("result").replaceChildren(el("p", "err", "오류: " + e.message)); }
+  $("go").disabled = false; $("go").textContent = "리뷰 받기";
+};
+</script>
+</body>
+</html>
