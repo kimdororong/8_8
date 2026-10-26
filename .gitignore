@@ -1,2 +1,7 @@
 __pycache__/
 *.pyc
+
+# 타사 상세페이지 원본·캡처 이미지는 저작물이므로 레포에 올리지 않는다
+references/analysis/img/
+references/analysis/crops/
+references/analysis/preview/
